@@ -8,7 +8,6 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
-#include <random>
 #include <vector>
 
 namespace rl {
@@ -213,10 +212,12 @@ inline Line method_line(const Gray& g, const Roi& r, int h, double tol = 2.5, in
     }
     Line best;
     if (pts.size() < 2) return best;
-    std::mt19937 rng(seed);
-    std::uniform_int_distribution<size_t> U(0, pts.size() - 1);
+    // 乱数は xorshift32 を自前で（std の分布は実装ごとに違い、Python 版と同じ点を選べないため）
+    uint32_t st = seed ? seed : 1;
+    auto U = [&]() -> size_t { st ^= st << 13; st ^= st >> 17; st ^= st << 5; return st % pts.size(); };
     for (int it = 0; it < iters; ++it) {
-        auto p = pts[U(rng)], q = pts[U(rng)];
+        auto p = pts[U()];
+        auto q = pts[U()];
         if (std::fabs(p.first - q.first) < 30) continue;
         double a = (q.second - p.second) / (q.first - p.first);
         if (std::fabs(a) > 0.2) continue;  // ほぼ水平な線だけ

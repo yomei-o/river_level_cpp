@@ -59,6 +59,22 @@ river_level shakujii_60s.mp4  --every 3 --roi 120 410 1160 590 --gauge 685 694
 python record.py "https://www.youtube.com/watch?v=u6l1L08s-MQ" zenpukuji_60s.mp4 60
 ```
 
+## Python 版
+
+`python/river_level.py` は C++ 版と同じ 7 つの方法・同じオプション・同じ CSV です（numpy と PyAV が必要）。
+
+```sh
+python python/river_level.py shakujii_60s.mp4 --every 3 --roi 120 410 1160 590 --gauge 685 694
+```
+
+計算は C++ と同じ順序・同じ式です。同じ画素を入れれば、CSV は全フレーム・全項目で完全に一致します。
+確認には、生の RGB24（1280×720 を並べただけ、拡張子 `.rgb`）を両方に入れて比べました（善福寺川・石神井川の 60 フレームずつ）。
+RANSAC の乱数も、そのために両方とも自前の xorshift32 にしてあります。
+
+mp4 から直接読むと、値が少しずれることがあります（例: 善福寺川の G が 392 と 394）。
+これは計算の違いではなく、mp4 の展開の違いです。C++ は mediakit_cpp、Python は PyAV で展開していて、
+YUV→RGB 変換の画素がわずかに違います。
+
 ## ビルド（WASM デモ）
 
 ```sh
@@ -74,4 +90,5 @@ python record.py "https://www.youtube.com/watch?v=u6l1L08s-MQ" zenpukuji_60s.mp4
 - `main.cpp` — ネイティブのコマンド（mediakit_cpp で mp4 を読み書き）
 - `wasm_api.cpp` — ブラウザから呼ぶ C 関数
 - `docs/` — デモ（GitHub Pages）
+- `python/river_level.py` — Python 版（C++ と同じ値）
 - `record.py` — ライブ配信を mp4 に録る

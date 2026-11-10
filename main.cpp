@@ -103,8 +103,14 @@ int main(int argc, char** argv) {
     Args a = parse(argc, argv);
 
     mk::Mp4Reader reader;
-    if (!reader.open(a.in)) { fprintf(stderr, "open %s: %s\n", a.in.c_str(), reader.error().c_str()); return 1; }
-    const mk::MediaInfo info = reader.info();
+    // .rgb は生の RGB24 1280x720 30fps（同じ画素で Python 版と比べる検証用）、それ以外は mp4
+    const bool raw = a.in.size() > 4 && a.in.compare(a.in.size() - 4, 4, ".rgb") == 0;
+    mk::MediaInfo info;
+    if (raw) { info.has_video = true; info.width = 1280; info.height = 720; info.fps = 30; }
+    else {
+        if (!reader.open(a.in)) { fprintf(stderr, "open %s: %s\n", a.in.c_str(), reader.error().c_str()); return 1; }
+        info = reader.info();
+    }
     if (!info.has_video) { fprintf(stderr, "%s: no video\n", a.in.c_str()); return 1; }
     mk::VideoDecoder dec;
     if (!dec.open(false)) { fprintf(stderr, "decoder: %s\n", dec.error().c_str()); return 1; }
@@ -136,12 +142,8 @@ int main(int argc, char** argv) {
     bool done = false, snapped = false;
     std::vector<mk::Packet> enc_out;
 
-    auto handle = [&](const mk::VideoFrame& vf) {
-        int fi = frame++;
-        if (done || fi % a.every) return;
-        mk::VideoFrame rf;
-        if (!conv.convert(vf, rf, mk::PixelFormat::RGB24, W, H)) { fprintf(stderr, "convert failed\n"); done = true; return; }
-        for (int y = 0; y < H; ++y) memcpy(&rgb.px[(size_t)y * W * 3], rf.data[0] + (size_t)y * rf.stride[0], (size_t)W * 3);
+    // rgb に 1 フレーム入った状態で呼ぶ
+    auto analyse = [&](int fi) {
         for (size_t i = 0; i < g.px.size(); ++i) {
             const uint8_t* p = &rgb.px[i * 3];
             g.px[i] = (uint8_t)((77 * p[0] + 150 * p[1] + 29 * p[2]) >> 8);
@@ -198,16 +200,35 @@ int main(int argc, char** argv) {
         ++used;
         if (a.max_frames && used >= a.max_frames) done = true;
     };
+    auto handle = [&](const mk::VideoFrame& vf) {
+        int fi = frame++;
+        if (done || fi % a.every) return;
+        mk::VideoFrame rf;
+        if (!conv.convert(vf, rf, mk::PixelFormat::RGB24, W, H)) { fprintf(stderr, "convert failed\n"); done = true; return; }
+        for (int y = 0; y < H; ++y) memcpy(&rgb.px[(size_t)y * W * 3], rf.data[0] + (size_t)y * rf.stride[0], (size_t)W * 3);
+        analyse(fi);
+    };
 
     mk::Packet pkt;
     std::vector<mk::VideoFrame> frames;
+    if (raw) {
+        // 生の RGB24（1280x720 を並べただけ）。Python 版と同じ画素で比べるため
+        FILE* rf = fopen(a.in.c_str(), "rb");
+        if (!rf) { fprintf(stderr, "open %s failed\n", a.in.c_str()); return 1; }
+        while (!done && fread(rgb.px.data(), 1, rgb.px.size(), rf) == rgb.px.size()) {
+            int fi = frame++;
+            if (fi % a.every == 0) analyse(fi);
+        }
+        fclose(rf);
+        done = true;
+    }
     while (!done && reader.read(pkt)) {
         if (pkt.type != mk::MediaType::Video) continue;
         frames.clear();
         if (!dec.decode(pkt, frames)) { fprintf(stderr, "decode: %s\n", dec.error().c_str()); break; }
         for (auto& f : frames) handle(f);
     }
-    if (!done) { frames.clear(); dec.flush(frames); for (auto& f : frames) handle(f); }
+    if (!done && !raw) { frames.clear(); dec.flush(frames); for (auto& f : frames) handle(f); }
     if (!a.overlay.empty()) {
         enc_out.clear(); enc.flush(enc_out);
         for (auto& p : enc_out) writer.write(p);
