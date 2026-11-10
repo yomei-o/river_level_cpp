@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>川の水位 y 座標</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1d232b; --muted: #5d6875; --line: #d8dde3; --accent: #1f6feb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0f1318; --panel: #181e25; --fg: #e3e8ee; --muted: #93a0ae; --line: #2a333d; --accent: #58a6ff; }
+}
+:root[data-theme="dark"] { --bg: #0f1318; --panel: #181e25; --fg: #e3e8ee; --muted: #93a0ae; --line: #2a333d; --accent: #58a6ff; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+main { max-width: 1320px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.35rem; margin: 0 0 4px; }
+p.lead { color: var(--muted); margin: 0 0 14px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+button, label.btn { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+button:hover, label.btn:hover { border-color: var(--accent); }
+button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+input[type=file] { display: none; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+canvas { width: 100%; height: auto; display: block; border-radius: 4px; }
+#view { cursor: crosshair; touch-action: none; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td { padding: 4px 2px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.y { text-align: right; font-weight: 600; white-space: nowrap; }
+.sw { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.note { color: var(--muted); font-size: 0.82rem; }
+.params { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; font-size: 0.9rem; margin-top: 8px; }
+.params > span:nth-child(even) { display: flex; gap: 4px; }
+.params input[type=number] { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font: inherit; }
+#status { color: var(--muted); font-size: 0.85rem; }
+h2 { font-size: 1rem; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>川の水面を y 座標で測る</h1>
+  <p class="lead">善福寺川・石神井川のライブカメラの録画から、水面の y 座標を 7 通りの方法で求めます。計算は C++ を WebAssembly にしたもので、ブラウザの中だけで動きます。</p>
+
+  <div class="bar">
+    <button id="bSample" class="on">善福寺川（60 秒）</button>
+    <button id="bSample2">石神井川（60 秒）</button>
+    <label class="btn">動画ファイルを開く<input type="file" id="file" accept="video/*"></label>
+    <button id="bScreen">画面共有（YouTube のタブ）</button>
+    <button id="bPlay">一時停止</button>
+    <span id="status">読み込み中…</span>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <canvas id="view" width="1280" height="720"></canvas>
+        <p class="note">白い点線が解析する範囲（ROI）です。画像をドラッグすると範囲を描き直せます。Shift を押しながらクリックすると、その x を水位標の列（方法 F）にします。</p>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <h2>時系列（y、上が水位の高い側）</h2>
+        <canvas id="chart" width="1280" height="260"></canvas>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <h2>推定した水面の y</h2>
+        <table id="tbl"></table>
+        <p class="note" id="perf"></p>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <h2>パラメータ</h2>
+        <div class="params">
+          <span>ROI x0, y0</span><span><input type="number" id="x0"> <input type="number" id="y0"></span>
+          <span>ROI x1, y1</span><span><input type="number" id="x1"> <input type="number" id="y1"></span>
+          <span>水位標 x0, x1</span><span><input type="number" id="g0"> <input type="number" id="g1"></span>
+          <span>短冊の幅</span><input type="number" id="strip">
+          <span>段差の高さ h</span><input type="number" id="eh">
+          <span>鏡映の K</span><input type="number" id="mk">
+          <span>時間窓 T</span><input type="number" id="T">
+          <span>鏡映 C を計算</span><input type="checkbox" id="mir" checked>
+        </div>
+        <p class="note">座標は 1280×720 に揃えた画面での値です。鏡映 C はいちばん重いので、遅い端末では外してください。</p>
+      </div>
+    </div>
+  </div>
+  <video id="vid" muted playsinline loop crossorigin="anonymous" style="display:none"></video>
+</main>
+
+<script src="river_level.js"></script>
+<script>
+const W = 1280, H = 720;
+const METHODS = [
+  { key: 'edge',     name: 'A 横エッジ',       color: '#ff3c3c', desc: '上下数行の明るさの差が最大の行' },
+  { key: 'step',     name: 'B 明るさ 2 段近似', color: '#ffc800', desc: '行平均を「明るい上／暗い下」で近似' },
+  { key: 'mirror',   name: 'C 鏡映対称',       color: '#00dcff', desc: '上下が鏡写しになる行。水中の壁が透けて見える川では成り立たない' },
+  { key: 'temporal', name: 'D 水際のちらつき', color: '#b450ff', desc: '直近 T フレームで最も揺れる行' },
+  { key: 'line',     name: 'E 直線当てはめ',   color: '#3cff3c', desc: '列ごとの段差点に RANSAC で直線（水位標の x での値）' },
+  { key: 'gauge',    name: 'F 水位標の下端',   color: '#ffffff', desc: '水位標の列の色 R−B が暖色から青に変わる行。目盛りに青い区間があると誤る' },
+  { key: 'color',    name: 'G 色 2 段近似',     color: '#ff78c8', desc: '護岸全体の R−B を「暖色の上／青い下」で近似。濁って茶色い水では効かない' },
+];
+const P = { x0: 300, y0: 300, x1: 1150, y1: 520, g0: 621, g1: 630, strip: 85, eh: 4, mk: 20, T: 30, mir: true };
+// 録画ごとの解析範囲と水位標の列
+const SAMPLES = {
+  zenpukuji: { src: 'zenpukuji_60s.mp4', name: '善福寺川（ミヤシタバシ）', x0: 300, y0: 300, x1: 1150, y1: 520, g0: 621, g1: 630 },
+  shakujii:  { src: 'shakujii_60s.mp4',  name: '石神井川（スズシロハシ）', x0: 120, y0: 410, x1: 1160, y1: 590, g0: 685, g1: 694 },
+};
+
+const view = document.getElementById('view'), vctx = view.getContext('2d', { willReadFrequently: true });
+const chart = document.getElementById('chart'), cctx = chart.getContext('2d');
+const vid = document.getElementById('vid');
+const statusEl = document.getElementById('status'), perfEl = document.getElementById('perf');
+const history = [];  // {t, values}
+let M = null, bufPtr = 0, latest = null, busy = false, dragging = null, screenStream = null;
+
+// ---- 表 ----
+const tbl = document.getElementById('tbl');
+tbl.innerHTML = METHODS.map(m =>
+  `<tr><td><span class="sw" style="background:${m.color};outline:1px solid #8886"></span>${m.name}<div class="note">${m.desc}</div></td><td class="y" id="v_${m.key}">–</td></tr>`).join('');
+
+// ---- パラメータ入力 ----
+for (const k of ['x0','y0','x1','y1','g0','g1','strip','eh','mk','T']) {
+  const el = document.getElementById(k); el.value = P[k];
+  el.addEventListener('change', () => { P[k] = +el.value; applyParams(); });
+}
+document.getElementById('mir').addEventListener('change', e => { P.mir = e.target.checked; applyParams(); });
+function syncInputs() { for (const k of ['x0','y0','x1','y1','g0','g1']) document.getElementById(k).value = P[k]; }
+function applyParams() {
+  if (!M) return;
+  M._rl_set_params(P.x0, P.y0, P.x1, P.y1, P.g0, P.g1, P.strip, P.eh, P.mk, P.T, P.mir ? 1 : 0);
+  history.length = 0;
+}
+
+// ---- 入力の切り替え ----
+const bSample = document.getElementById('bSample'), bSample2 = document.getElementById('bSample2'), bScreen = document.getElementById('bScreen'), bPlay = document.getElementById('bPlay');
+function setActive(b) { for (const x of [bSample, bSample2, bScreen]) x.classList.toggle('on', x === b); }
+function stopScreen() { if (screenStream) { screenStream.getTracks().forEach(t => t.stop()); screenStream = null; } }
+function playSrc(src) {
+  stopScreen(); vid.srcObject = null; vid.src = src; vid.play().catch(() => {});
+  applyParams();
+}
+function playSample(btn, key) {
+  const S = SAMPLES[key];
+  for (const k of ['x0','y0','x1','y1','g0','g1']) P[k] = S[k];
+  syncInputs(); setActive(btn); playSrc(S.src); statusEl.textContent = S.name + ' の録画を再生中';
+}
+bSample.onclick = () => playSample(bSample, 'zenpukuji');
+bSample2.onclick = () => playSample(bSample2, 'shakujii');
+document.getElementById('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  setActive(null); playSrc(URL.createObjectURL(f)); statusEl.textContent = f.name;
+};
+bScreen.onclick = async () => {
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    stopScreen(); screenStream = s; vid.removeAttribute('src'); vid.srcObject = s; await vid.play();
+    setActive(bScreen); applyParams();
+    statusEl.textContent = '画面共有中（映像は 1280×720 に引き伸ばして解析。YouTube は全画面表示にすると座標が合います）';
+    s.getVideoTracks()[0].addEventListener('ended', () => bSample.onclick());
+  } catch (e) { statusEl.textContent = '画面共有はキャンセルされました'; }
+};
+bPlay.onclick = () => {
+  if (vid.paused) { vid.play(); bPlay.textContent = '一時停止'; } else { vid.pause(); bPlay.textContent = '再生'; }
+};
+
+// ---- ROI のドラッグと水位標の指定 ----
+function toImg(e) {
+  const r = view.getBoundingClientRect();
+  return [Math.round((e.clientX - r.left) * W / r.width), Math.round((e.clientY - r.top) * H / r.height)];
+}
+view.addEventListener('pointerdown', e => {
+  const [x, y] = toImg(e);
+  if (e.shiftKey) { P.g0 = x - 4; P.g1 = x + 5; syncInputs(); applyParams(); return; }
+  dragging = { x, y }; view.setPointerCapture(e.pointerId);
+});
+view.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const [x, y] = toImg(e);
+  dragging.cx = x; dragging.cy = y;
+});
+view.addEventListener('pointerup', e => {
+  if (!dragging) return;
+  const [x, y] = toImg(e), d = dragging; dragging = null;
+  const x0 = Math.max(0, Math.min(d.x, x)), x1 = Math.min(W, Math.max(d.x, x));
+  const y0 = Math.max(0, Math.min(d.y, y)), y1 = Math.min(H, Math.max(d.y, y));
+  if (x1 - x0 < 40 || y1 - y0 < 3 * P.mk + 2) { statusEl.textContent = `範囲が小さすぎます（高さは ${3 * P.mk + 2} 以上）`; return; }
+  Object.assign(P, { x0, y0, x1, y1 }); syncInputs(); applyParams();
+});
+
+// ---- 解析ループ ----
+function analyse() {
+  vctx.drawImage(vid, 0, 0, W, H);
+  const img = vctx.getImageData(0, 0, W, H);
+  M.HEAPU8.set(img.data, bufPtr);
+  const t0 = performance.now();
+  const ok = M._rl_process();
+  const ms = performance.now() - t0;
+  if (!ok) { latest = null; return; }
+  const p = M._rl_results() >> 3, F = M.HEAPF64;
+  const r = {
+    edge: F[p], step: F[p + 1], mirror: F[p + 2], temporal: F[p + 3],
+    lineA: F[p + 4], lineB: F[p + 5], inliers: F[p + 6], gauge: F[p + 7], color: F[p + 8], strips: [],
+  };
+  const gcx = (P.g0 + P.g1) / 2;
+  r.line = r.lineA * gcx + r.lineB;
+  const n = F[p + 9];
+  for (let i = 0; i < n; i++) {
+    const o = p + 10 + i * 7;
+    r.strips.push({ x0: F[o], x1: F[o + 1], edge: F[o + 2], step: F[o + 3], mirror: F[o + 4], temporal: F[o + 5], color: F[o + 6] });
+  }
+  latest = r;
+  history.push({ t: vid.currentTime, v: r });
+  if (history.length > 600) history.shift();
+  perfEl.textContent = `1 フレームの計算 ${ms.toFixed(1)} ms`;
+}
+
+function hl(x0, x1, y, color, w = 2) {
+  if (!isFinite(y)) return;
+  vctx.fillStyle = color; vctx.fillRect(x0, Math.round(y) - w / 2, x1 - x0, w);
+}
+function drawOverlay() {
+  vctx.setLineDash([4, 4]); vctx.strokeStyle = '#fff'; vctx.lineWidth = 1;
+  vctx.strokeRect(P.x0 + .5, P.y0 + .5, P.x1 - P.x0 - 1, P.y1 - P.y0 - 1); vctx.setLineDash([]);
+  if (dragging && dragging.cx != null) {
+    vctx.strokeStyle = '#ff0'; vctx.strokeRect(dragging.x, dragging.y, dragging.cx - dragging.x, dragging.cy - dragging.y);
+  }
+  vctx.strokeStyle = '#fff8'; vctx.strokeRect(P.g0 - .5, P.y0, P.g1 - P.g0 + 1, P.y1 - P.y0);
+  const r = latest; if (!r) return;
+  const keys = ['edge', 'step', 'mirror', 'temporal', 'color'];
+  for (const s of r.strips) {
+    const q = (s.x1 - s.x0) / keys.length;
+    keys.forEach((k, j) => hl(s.x0 + j * q, s.x0 + (j + 1) * q, s[k], METHODS.find(m => m.key === k).color, 3));
+  }
+  if (isFinite(r.lineB)) {
+    vctx.strokeStyle = '#3cff3c'; vctx.lineWidth = 2; vctx.beginPath();
+    vctx.moveTo(0, r.lineB); vctx.lineTo(W, r.lineA * W + r.lineB); vctx.stroke();
+  }
+  hl(P.g0 - 18, P.g1 + 18, r.gauge, '#ffffff', 3);
+}
+
+function drawChart() {
+  const cw = chart.width, ch = chart.height, pad = 40;
+  const css = getComputedStyle(document.documentElement);
+  cctx.clearRect(0, 0, cw, ch);
+  const vals = history.flatMap(h => METHODS.map(m => h.v[m.key]).filter(isFinite));
+  if (!vals.length) return;
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 10) { const c = (hi + lo) / 2; lo = c - 5; hi = c + 5; }
+  const X = i => pad + (cw - pad - 8) * i / Math.max(1, history.length - 1);
+  const Y = y => 8 + (ch - 24) * (y - lo) / (hi - lo);  // y が小さい（水位が高い）ほど上
+  cctx.fillStyle = css.getPropertyValue('--muted'); cctx.font = '20px system-ui';
+  cctx.strokeStyle = css.getPropertyValue('--line'); cctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const y = lo + (hi - lo) * k / 4;
+    cctx.beginPath(); cctx.moveTo(pad, Y(y)); cctx.lineTo(cw, Y(y)); cctx.stroke();
+    cctx.fillText(y.toFixed(0), 0, Y(y) + 6);
+  }
+  for (const m of METHODS) {
+    cctx.strokeStyle = m.color === '#ffffff' ? css.getPropertyValue('--fg') : m.color; cctx.lineWidth = 2; cctx.beginPath();
+    let pen = false;
+    history.forEach((h, i) => {
+      const y = h.v[m.key];
+      if (!isFinite(y)) { pen = false; return; }
+      if (pen) cctx.lineTo(X(i), Y(y)); else { cctx.moveTo(X(i), Y(y)); pen = true; }
+    });
+    cctx.stroke();
+  }
+}
+
+function updateTable() {
+  for (const m of METHODS) {
+    const v = latest ? latest[m.key] : NaN;
+    document.getElementById('v_' + m.key).textContent = isFinite(v) ? v.toFixed(1) : '–';
+  }
+}
+
+let lastT = -1;
+function loop() {
+  if (vid.readyState >= 2 && !busy) {
+    busy = true;
+    // 同じフレームを二重に数えない（時間変動 D のため）
+    const t = vid.srcObject ? performance.now() : vid.currentTime;
+    if (t !== lastT) { lastT = t; analyse(); updateTable(); drawChart(); }
+    else vctx.drawImage(vid, 0, 0, W, H);
+    drawOverlay();
+    busy = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+RiverLevel().then(mod => {
+  M = mod; bufPtr = M._rl_frame_buffer(W, H); applyParams();
+  bSample.onclick(); requestAnimationFrame(loop);
+}).catch(e => { statusEl.textContent = 'WASM の読み込みに失敗: ' + e; });
+</script>
+</body>
+</html>

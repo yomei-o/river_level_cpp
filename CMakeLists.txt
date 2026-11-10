@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.16)
+project(river_level C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+  # mediakit と同じ静的 CRT（VC 再頒布パッケージ無しで動く）
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  add_compile_options(/utf-8)
+endif()
+
+# mp4 の展開・書き出しは mediakit_cpp。隣に clone してあればそれを、無ければ GitHub から取ってくる。
+set(MEDIAKIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../mediakit_cpp" CACHE PATH "mediakit_cpp のソース")
+set(MK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+if(EXISTS "${MEDIAKIT_DIR}/CMakeLists.txt")
+  add_subdirectory("${MEDIAKIT_DIR}" mediakit EXCLUDE_FROM_ALL)
+else()
+  include(FetchContent)
+  FetchContent_Declare(mediakit GIT_REPOSITORY https://github.com/yomei-o/mediakit_cpp.git GIT_TAG main)
+  FetchContent_GetProperties(mediakit)
+  if(NOT mediakit_POPULATED)
+    FetchContent_Populate(mediakit)
+    add_subdirectory(${mediakit_SOURCE_DIR} ${mediakit_BINARY_DIR} EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+add_executable(river_level main.cpp)
+target_link_libraries(river_level PRIVATE mk_codec)
